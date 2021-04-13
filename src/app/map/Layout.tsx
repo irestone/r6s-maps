@@ -1,6 +1,6 @@
 /** @jsxImportSource @emotion/react */
-import { CSSProperties, FC, useCallback, useEffect, useRef, useState } from 'react'
-import { find, map, difference } from 'lodash'
+import { CSSProperties, FC, useCallback, useEffect, useState } from 'react'
+import { find, map, difference, uniqueId } from 'lodash'
 import { useSnapshot } from 'valtio'
 
 import { getLevelById } from '../../database'
@@ -14,23 +14,51 @@ export const DEFAULT_VIEWPORT_SCALE = 4
 // #################################################################################################
 
 type TView = {
+  id: string
   level: number // TLevel{id}
   scale: number
   position: [any, any]
 }
 
 const createView = (level: number): TView => ({
+  id: uniqueId(),
   level,
   scale: DEFAULT_VIEWPORT_SCALE,
   position: [0, 0],
 })
 
-const View: FC<TView> = ({ level: levelId }) => {
+const switchViewLevel = (view: TView, level: number): TView => ({ ...view, level })
+
+const View: FC<TView & { onLevelSwitch: (viewId: string, levelId: number) => void }> = ({
+  id,
+  level: levelId,
+  onLevelSwitch,
+}) => {
+  const state = useSnapshot(proxyState)
   const level = getLevelById(levelId)
+
+  const handleLevelSwitch = useCallback(
+    ({ target }) => {
+      onLevelSwitch(id, +target.value)
+    },
+    [onLevelSwitch, id]
+  )
+
   return (
     <div
       css={{ width: '100%', height: '100%', background: `url(${level.blueprint}) center / cover` }}
-    ></div>
+    >
+      <select value={level.id} onChange={handleLevelSwitch}>
+        {state.map?.levels.map((item) => {
+          const { id, type } = getLevelById(item)
+          return (
+            <option key={id} value={id}>
+              {type}
+            </option>
+          )
+        })}
+      </select>
+    </div>
   )
 }
 
@@ -39,7 +67,7 @@ const View: FC<TView> = ({ level: levelId }) => {
 // #################################################################################################
 
 type TViewport = {
-  for: number // TLevel{id}
+  id: string
   view: TView
   position: TViewportPosition
 }
@@ -64,15 +92,23 @@ const viewportPosition2StyleMapping: { [position in TViewportPosition]: CSSPrope
 }
 
 const createViewport = (view: TView, position: TViewportPosition): TViewport => ({
-  for: view.level,
+  id: uniqueId(),
   view,
   position,
 })
 
-const Viewport: FC<TViewport & { onViewportClose: () => void }> = ({
-  onViewportClose,
-  ...viewport
-}) => (
+// todo: Need to learn about a better approach to structure this kind of operations going through several abstraction barriers in FP.
+const switchViewportLevel = (viewport: TViewport, level: number): TViewport => {
+  const updatedView = switchViewLevel(viewport.view, level)
+  return { ...viewport, view: updatedView }
+}
+
+const Viewport: FC<
+  TViewport & {
+    onViewportClose: (viewportId: string) => void
+    onLevelSwitch: (viewId: string, levelId: number) => void
+  }
+> = ({ onViewportClose, onLevelSwitch, ...viewport }) => (
   <div
     css={{
       position: 'absolute',
@@ -81,8 +117,11 @@ const Viewport: FC<TViewport & { onViewportClose: () => void }> = ({
       ...viewportPosition2StyleMapping[viewport.position],
     }}
   >
-    <View {...viewport.view} />
-    <button css={{ position: 'absolute', right: 0, top: 0 }} onClick={onViewportClose}>
+    <View {...viewport.view} onLevelSwitch={onLevelSwitch} />
+    <button
+      css={{ position: 'absolute', right: 0, top: 0 }}
+      onClick={() => onViewportClose(viewport.id)}
+    >
       x
     </button>
   </div>
@@ -126,10 +165,10 @@ const addViewport = (layout: TLayout, view: TView): TLayout => {
   }
 }
 
-const removeViewport = (layout: TLayout, levelId: number): TLayout => {
-  const viewport = find(layout, { for: levelId })
+const removeViewport = (layout: TLayout, viewportId: string): TLayout => {
+  const viewport = layout.find((item) => item.id === viewportId)
   if (!viewport) throw new Error(`The viewport is not found.`)
-  const otherViewports = layout.filter((item) => item.for !== levelId)
+  const otherViewports = layout.filter((item) => item.id !== viewportId)
   const layoutSnapshot = getLayoutSnapshot(layout)
   const p = viewport.position
   switch (layoutSnapshot) {
@@ -166,33 +205,50 @@ const removeViewport = (layout: TLayout, levelId: number): TLayout => {
 
 const Layout: FC = () => {
   const state = useSnapshot(proxyState)
-  const cashedLayoutRef = useRef<TLayout>([])
   const [layout, setLayout] = useState<TLayout>([])
 
+  // todo: Here I assume that: viewport -> view -> level -- 1 to 1 unique viewport to level relation but there are no rules and checks about that.
   useEffect(() => {
-    const cashedLayout = cashedLayoutRef.current
-    const cashedLevels = map(cashedLayout, 'for')
-    const removedLevels = difference(cashedLevels, state.levels)
-    const result1 = removedLevels.reduce(removeViewport, cashedLayout)
-    const addedLevels = difference(state.levels, cashedLevels)
-    const result2 = addedLevels.map(createView).reduce(addViewport, result1)
-    cashedLayoutRef.current = result2
-    setLayout(result2)
+    setLayout((layout) => {
+      const levels = map(layout, 'view.level')
+      const removedLevels = difference(levels, state.levels)
+      const addedLevels = difference(state.levels, levels)
+      const updatedLayout1 = removedLevels
+        .map((level) => find(layout, ['view.level', level])?.id as string)
+        .reduce(removeViewport, layout)
+      const updatedLayout2 = addedLevels.map(createView).reduce(addViewport, updatedLayout1)
+      return updatedLayout2
+    })
   }, [state.levels])
 
-  const closeViewport = useCallback(
-    (levelId: number) => {
-      proxyState.levels = state.levels.filter((id) => id !== levelId)
-    },
-    [state.levels]
-  )
+  // todo: level -> levelId everywhere
+  const switchLevel = useCallback((viewId: string, levelId: number) => {
+    setLayout((layout) => {
+      const viewport = find(layout, ['view.id', viewId])
+      if (!viewport) throw new Error('Viewport not found.')
+      const updatedViewport = switchViewportLevel(viewport, levelId)
+      const swapper = find(layout, ['view.level', levelId])
+      const updatedSwapper = swapper && switchViewportLevel(swapper, viewport.view.level)
+      const updatedLayout = layout.map((viewport) => {
+        return viewport.id === updatedViewport.id
+          ? updatedViewport
+          : viewport.id === updatedSwapper?.id
+          ? updatedSwapper
+          : viewport
+      })
+      proxyState.levels = map(updatedLayout, 'view.level')
+      return updatedLayout
+    })
+  }, [])
 
-  // const switchLevel = useCallback(
-  //   (from: number, to: number) => {
-  //     // ...
-  //   },
-  //   [state.levels]
-  // )
+  const closeViewport = useCallback(
+    (viewportId: string) => {
+      const viewport = find(layout, { id: viewportId })
+      if (!viewport) throw new Error('Viewport not found.')
+      proxyState.levels = state.levels.filter((id) => id !== viewport.view.level)
+    },
+    [layout, state.levels]
+  )
 
   useEffect(() => {
     proxyState.levels = state.map?.levels.slice(0, VIEWPORTS_LIMIT) || []
@@ -202,9 +258,10 @@ const Layout: FC = () => {
     <div css={{ position: 'relative' }}>
       {layout.map((viewport) => (
         <Viewport
-          key={viewport.for}
+          key={viewport.id}
           {...viewport}
-          onViewportClose={() => closeViewport(viewport.for)}
+          onViewportClose={closeViewport}
+          onLevelSwitch={switchLevel}
         />
       ))}
     </div>
