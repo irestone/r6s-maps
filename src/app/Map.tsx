@@ -20,7 +20,7 @@ const Map = () => {
   }, [map, routerHistory])
 
   return (
-    <div css={{ display: 'grid', gridTemplateColumns: '20rem auto', height: '100%' }}>
+    <div css={{ width: '100%', height: '100%', position: 'relative', overflow: 'hidden' }}>
       <Sidebar />
       <Layout />
     </div>

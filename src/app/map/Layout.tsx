@@ -1,11 +1,13 @@
 /** @jsxImportSource @emotion/react */
-import { CSSProperties, FC, useCallback, useEffect, useState } from 'react'
+import { FC, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { find, map, difference, uniqueId } from 'lodash'
-import { useSnapshot } from 'valtio'
+import { proxy, useSnapshot } from 'valtio'
 
 import { getLevelById } from '../../database'
 import { VIEWPORTS_LIMIT } from '../../config'
 import proxyState from '../../store'
+
+const proxyLayoutState = proxy<{ size: [number, number] }>({ size: [0, 0] })
 
 export const DEFAULT_VIEWPORT_SCALE = 4
 
@@ -20,6 +22,7 @@ type TView = {
   position: [any, any]
 }
 
+// ? where scale and position logic should be?
 const createView = (level: number): TView => ({
   id: uniqueId(),
   level,
@@ -29,13 +32,55 @@ const createView = (level: number): TView => ({
 
 const switchViewLevel = (view: TView, level: number): TView => ({ ...view, level })
 
-const View: FC<TView & { onLevelSwitch: (viewId: string, levelId: number) => void }> = ({
-  id,
-  level: levelId,
-  onLevelSwitch,
-}) => {
+const View: FC<
+  TView & {
+    width: number
+    height: number
+    onLevelSwitch: (viewId: string, levelId: number) => void
+  }
+> = ({ id, level: levelId, onLevelSwitch, width, height }) => {
+  const levelElementRef = useRef<HTMLDivElement | null>(null)
+  const blueprintElementRef = useRef<HTMLImageElement | null>(null)
+
   const state = useSnapshot(proxyState)
-  const level = getLevelById(levelId)
+  const [scale, setScale] = useState<number>(1)
+
+  const level = useMemo(() => getLevelById(levelId), [levelId])
+
+  const [levelSize, setLevelSize] = useState<[number, number]>([0, 0])
+
+  // update level size on blueprint change
+  useLayoutEffect(() => {
+    const levelElement = levelElementRef.current
+    const blueprintElement = blueprintElementRef.current
+    if (!blueprintElement || !levelElement) throw new Error('Unexpected Error.')
+
+    const updateLevelSize = () => {
+      blueprintElement.style.width = 'auto'
+      blueprintElement.style.height = 'auto'
+      const { width, height } = blueprintElement.getBoundingClientRect()
+      levelElement.style.width = `${width}px`
+      levelElement.style.height = `${height}px`
+      blueprintElement.style.width = '100%'
+      blueprintElement.style.height = '100%'
+      setLevelSize([width, height])
+    }
+
+    blueprintElement.addEventListener('load', updateLevelSize)
+    return () => blueprintElement.removeEventListener('load', updateLevelSize)
+  }, [level.blueprint, setLevelSize])
+
+  const levelTransformBase = useMemo(() => {
+    const [levelWidth, levelHeight] = levelSize
+    const levelAR = levelWidth / levelHeight
+    const viewAR = width / height
+    const scale = viewAR < levelAR ? height / levelHeight : width / levelWidth
+    return `translate(${width / 2}px, ${height / 2}px) translate(-50%, -50%) scale(${scale})`
+  }, [width, height, levelSize])
+
+  const levelTransform = useMemo(() => {
+    return `${levelTransformBase} scale(${scale})`
+  }, [levelTransformBase, scale])
 
   const handleLevelSwitch = useCallback(
     ({ target }) => {
@@ -46,9 +91,27 @@ const View: FC<TView & { onLevelSwitch: (viewId: string, levelId: number) => voi
 
   return (
     <div
-      css={{ width: '100%', height: '100%', background: `url(${level.blueprint}) center / cover` }}
+      css={{
+        width: '100%',
+        height: '100%',
+        position: 'relative',
+        overflow: 'hidden',
+        border: '1px solid blue',
+      }}
     >
-      <select value={level.id} onChange={handleLevelSwitch}>
+      <div ref={levelElementRef} css={{ transform: levelTransform, transition: 'all .3s' }}>
+        <img
+          ref={blueprintElementRef}
+          src={level.blueprint}
+          alt={level.type}
+          css={{ display: 'block' }}
+        />
+      </div>
+      <select
+        value={level.id}
+        onChange={handleLevelSwitch}
+        css={{ position: 'absolute', top: 0, left: 0 }}
+      >
         {state.map?.levels.map((item) => {
           const { id, type } = getLevelById(item)
           return (
@@ -58,6 +121,15 @@ const View: FC<TView & { onLevelSwitch: (viewId: string, levelId: number) => voi
           )
         })}
       </select>
+      <input
+        type="range"
+        min={1}
+        max={4}
+        step={0.1}
+        value={scale}
+        onChange={(event) => setScale(+event.target.value)}
+        css={{ position: 'absolute', top: 0, left: 100 }}
+      />
     </div>
   )
 }
@@ -81,14 +153,16 @@ type TViewportPosition =
   | 5 // left-bottom quadrant
   | 6 // right-bottom quadrant
 
-const viewportPosition2StyleMapping: { [position in TViewportPosition]: CSSProperties } = {
-  0: { width: '100%', height: '100%', left: 0, top: 0 },
-  1: { width: '50%', height: '100%', left: 0, top: 0 },
-  2: { width: '50%', height: '100%', left: '50%', top: 0 },
-  3: { width: '50%', height: '50%', left: 0, top: 0 },
-  4: { width: '50%', height: '50%', left: '50%', top: 0 },
-  5: { width: '50%', height: '50%', left: 0, top: '50%' },
-  6: { width: '50%', height: '50%', left: '50%', top: '50%' },
+const viewportPositionMapping: {
+  [position in TViewportPosition]: { size: [number, number]; xy: [number, number] }
+} = {
+  0: { size: [1.0, 1.0], xy: [0.0, 0.0] },
+  1: { size: [0.5, 1.0], xy: [0.0, 0.0] },
+  2: { size: [0.5, 1.0], xy: [0.5, 0.0] },
+  3: { size: [0.5, 0.5], xy: [0.0, 0.0] },
+  4: { size: [0.5, 0.5], xy: [0.5, 0.0] },
+  5: { size: [0.5, 0.5], xy: [0.0, 0.5] },
+  6: { size: [0.5, 0.5], xy: [0.5, 0.5] },
 }
 
 const createViewport = (view: TView, position: TViewportPosition): TViewport => ({
@@ -108,24 +182,41 @@ const Viewport: FC<
     onViewportClose: (viewportId: string) => void
     onLevelSwitch: (viewId: string, levelId: number) => void
   }
-> = ({ onViewportClose, onLevelSwitch, ...viewport }) => (
-  <div
-    css={{
-      position: 'absolute',
-      border: '1px solid white',
-      transition: 'all .3s',
-      ...viewportPosition2StyleMapping[viewport.position],
-    }}
-  >
-    <View {...viewport.view} onLevelSwitch={onLevelSwitch} />
-    <button
-      css={{ position: 'absolute', right: 0, top: 0 }}
-      onClick={() => onViewportClose(viewport.id)}
+> = ({ onViewportClose, onLevelSwitch, ...viewport }) => {
+  const state = useSnapshot(proxyLayoutState)
+
+  const positionStyles = useMemo(() => {
+    const {
+      size: [w, h],
+      xy: [x, y],
+    } = viewportPositionMapping[viewport.position]
+    const [W, H] = state.size
+    return { width: W * w, height: H * h, left: W * x, top: H * y }
+  }, [viewport.position, state.size])
+
+  return (
+    <div
+      css={{
+        position: 'absolute',
+        transition: 'all .3s',
+        ...positionStyles,
+      }}
     >
-      x
-    </button>
-  </div>
-)
+      <View
+        {...viewport.view}
+        onLevelSwitch={onLevelSwitch}
+        width={positionStyles.width}
+        height={positionStyles.height}
+      />
+      <button
+        css={{ position: 'absolute', right: 0, top: 0 }}
+        onClick={() => onViewportClose(viewport.id)}
+      >
+        x
+      </button>
+    </div>
+  )
+}
 
 // section #########################################################################################
 //  LAYOUT
@@ -206,6 +297,7 @@ const removeViewport = (layout: TLayout, viewportId: string): TLayout => {
 const Layout: FC = () => {
   const state = useSnapshot(proxyState)
   const [layout, setLayout] = useState<TLayout>([])
+  const layoutElementRef = useRef<HTMLDivElement | null>(null)
 
   // todo: Here I assume that: viewport -> view -> level -- 1 to 1 unique viewport to level relation but there are no rules and checks about that.
   useEffect(() => {
@@ -254,8 +346,28 @@ const Layout: FC = () => {
     proxyState.levels = state.map?.levels.slice(0, VIEWPORTS_LIMIT) || []
   }, [state.map])
 
+  useLayoutEffect(() => {
+    const setLayoutSize = () => {
+      const layoutElement = layoutElementRef.current
+      if (!layoutElement) throw new Error('Unexpected.')
+      const { width, height } = layoutElement.getBoundingClientRect()
+      console.log(width, height)
+      proxyLayoutState.size = [width, height]
+    }
+    setLayoutSize()
+    document.addEventListener('DOMContentLoaded', setLayoutSize)
+    window.addEventListener('resize', setLayoutSize)
+    return () => {
+      document.removeEventListener('DOMContentLoaded', setLayoutSize)
+      window.removeEventListener('resize', setLayoutSize)
+    }
+  }, [])
+
   return (
-    <div css={{ position: 'relative' }}>
+    <div
+      ref={layoutElementRef}
+      css={{ width: `calc(100% - 300px)`, height: '100%', position: 'absolute', top: 0, left: 300 }}
+    >
       {layout.map((viewport) => (
         <Viewport
           key={viewport.id}

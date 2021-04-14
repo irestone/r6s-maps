@@ -22,7 +22,16 @@ const Sidebar: FC = () => {
   if (!state.map) return null
 
   return (
-    <div css={{ borderRight: '1px solid #ccc', overflowY: 'auto' }}>
+    <div
+      css={{
+        position: 'absolute',
+        width: 300,
+        height: '100%',
+        top: 0,
+        left: 0,
+        overflowY: 'auto',
+      }}
+    >
       <select value={state.map.slug} onChange={onMapChange}>
         {db.maps.map(({ id, slug, name }) => (
           <option key={id} value={slug}>
@@ -55,7 +64,9 @@ const Sidebar: FC = () => {
                 color: isDisabled ? 'black' : isViewing ? 'white' : 'gray',
                 cursor: isDisabled ? 'auto' : 'pointer',
                 textTransform: 'uppercase',
-                transition: 'all .3s',
+                // todo: mouse follow parallax
+                // todo: faster animation when leave
+                transition: 'all 1s cubic-bezier(.09,.98,.62,1)',
                 display: 'flex',
                 justifyContent: 'center',
                 alignItems: 'center',

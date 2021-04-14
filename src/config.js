@@ -1,1 +1,1 @@
-export const VIEWPORTS_LIMIT = 4
+export const VIEWPORTS_LIMIT = 3
