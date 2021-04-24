@@ -1,11 +1,13 @@
 /** @jsxImportSource @emotion/react */
 import { FC, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
-import { find, map, difference, uniqueId } from 'lodash'
+import { find, map, difference, uniqueId, clamp } from 'lodash'
 import { proxy, useSnapshot } from 'valtio'
 
 import { getLevelById } from '../../database'
 import { VIEWPORTS_LIMIT } from '../../config'
 import proxyState from '../../store'
+import { useDrag, useWheel } from 'react-use-gesture'
+import { a, useSpring, to } from '@react-spring/web'
 
 const proxyLayoutState = proxy<{ size: [number, number] }>({ size: [0, 0] })
 
@@ -43,44 +45,87 @@ const View: FC<
   const blueprintElementRef = useRef<HTMLImageElement | null>(null)
 
   const state = useSnapshot(proxyState)
-  const [scale, setScale] = useState<number>(1)
 
   const level = useMemo(() => getLevelById(levelId), [levelId])
 
   const [levelSize, setLevelSize] = useState<[number, number]>([0, 0])
 
-  // update level size on blueprint change
+  const [{ x, y, scale }, setOptions] = useSpring(() => ({
+    x: 0,
+    y: 0,
+    scale: 1,
+    config: { tension: 1000, friction: 66.6 },
+  }))
+
+  const transform = useMemo(() => {
+    return to([x, y, scale], (x, y, scale) => {
+      return `translate(${-x}px, ${-y}px) scale(${scale})`
+    })
+  }, [x, y, scale])
+
+  const transformOrigin = useMemo(() => {
+    return to([x, y], (x, y) => `${x}px ${y}px`)
+  }, [x, y])
+
+  const zoomRate = 0.003
+  const maxZoom = 4
+
+  const handleScale = useWheel(
+    ({ offset: [_, sy] }) => {
+      const scale = -sy * zoomRate + 1
+      const xMin = width / 2 / scale
+      const xMax = (levelSize[0] * scale - width / 2) / scale
+      const yMin = height / 2 / scale
+      const yMax = (levelSize[1] * scale - height / 2) / scale
+      setOptions({ scale, x: clamp(x.get(), xMin, xMax), y: clamp(y.get(), yMin, yMax) })
+    },
+    { bounds: { top: -(maxZoom / zoomRate), bottom: 0 } }
+  )
+
+  const handleDrag = useDrag(
+    ({ movement: [mx, my] }) => setOptions({ x: -mx / scale.get(), y: -my / scale.get() }),
+    {
+      initial: () => [-x.get() * scale.get(), -y.get() * scale.get()],
+      bounds: () => ({
+        left: -(levelSize[0] * scale.get() - width / 2),
+        right: -(width / 2),
+        top: -(levelSize[1] * scale.get() - height / 2),
+        bottom: -(height / 2),
+      }),
+      rubberband: true,
+    }
+  )
+
   useLayoutEffect(() => {
     const levelElement = levelElementRef.current
     const blueprintElement = blueprintElementRef.current
     if (!blueprintElement || !levelElement) throw new Error('Unexpected Error.')
-
     const updateLevelSize = () => {
+      // get blueprint's origin size
       blueprintElement.style.width = 'auto'
       blueprintElement.style.height = 'auto'
-      const { width, height } = blueprintElement.getBoundingClientRect()
-      levelElement.style.width = `${width}px`
-      levelElement.style.height = `${height}px`
+      const {
+        width: blueprintWidth,
+        height: blueprintHeight,
+      } = blueprintElement.getBoundingClientRect()
       blueprintElement.style.width = '100%'
       blueprintElement.style.height = '100%'
-      setLevelSize([width, height])
+      // set level size using blueprint's aspect ratio so that it matches view size, covering it
+      const blueprintAR = blueprintWidth / blueprintHeight
+      const viewAR = width / height
+      const scale = viewAR < blueprintAR ? height / blueprintHeight : width / blueprintWidth
+      const levelWidth = blueprintWidth * scale
+      const levelHeight = blueprintHeight * scale
+      levelElement.style.width = `${levelWidth}px`
+      levelElement.style.height = `${levelHeight}px`
+      setLevelSize([levelWidth, levelHeight])
+      // todo: reset only on first load
+      setOptions({ x: levelWidth / 2, y: levelHeight / 2, scale: 1 })
     }
-
+    updateLevelSize()
     blueprintElement.addEventListener('load', updateLevelSize)
     return () => blueprintElement.removeEventListener('load', updateLevelSize)
-  }, [level.blueprint, setLevelSize])
-
-  const levelTransformBase = useMemo(() => {
-    const [levelWidth, levelHeight] = levelSize
-    const levelAR = levelWidth / levelHeight
-    const viewAR = width / height
-    const scale = viewAR < levelAR ? height / levelHeight : width / levelWidth
-    return `translate(${width / 2}px, ${height / 2}px) translate(-50%, -50%) scale(${scale})`
-  }, [width, height, levelSize])
-
-  const levelTransform = useMemo(() => {
-    return `${levelTransformBase} scale(${scale})`
-  }, [levelTransformBase, scale])
+  }, [level.blueprint, width, height, setLevelSize, setOptions, x, y])
 
   const handleLevelSwitch = useCallback(
     ({ target }) => {
@@ -90,7 +135,7 @@ const View: FC<
   )
 
   return (
-    <div
+    <a.div
       css={{
         width: '100%',
         height: '100%',
@@ -98,15 +143,22 @@ const View: FC<
         overflow: 'hidden',
         border: '1px solid blue',
       }}
+      {...handleScale()}
     >
-      <div ref={levelElementRef} css={{ transform: levelTransform, transition: 'all .3s' }}>
+      <a.div
+        ref={levelElementRef}
+        css={{ position: 'absolute', left: '50%', top: '50%', userSelect: 'none' }}
+        {...handleDrag()}
+        style={{ transform, transformOrigin }}
+      >
         <img
           ref={blueprintElementRef}
           src={level.blueprint}
           alt={level.type}
           css={{ display: 'block' }}
+          draggable={false}
         />
-      </div>
+      </a.div>
       <select
         value={level.id}
         onChange={handleLevelSwitch}
@@ -121,16 +173,7 @@ const View: FC<
           )
         })}
       </select>
-      <input
-        type="range"
-        min={1}
-        max={4}
-        step={0.1}
-        value={scale}
-        onChange={(event) => setScale(+event.target.value)}
-        css={{ position: 'absolute', top: 0, left: 100 }}
-      />
-    </div>
+    </a.div>
   )
 }
 
@@ -351,7 +394,6 @@ const Layout: FC = () => {
       const layoutElement = layoutElementRef.current
       if (!layoutElement) throw new Error('Unexpected.')
       const { width, height } = layoutElement.getBoundingClientRect()
-      console.log(width, height)
       proxyLayoutState.size = [width, height]
     }
     setLayoutSize()
