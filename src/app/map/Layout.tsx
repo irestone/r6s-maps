@@ -1,17 +1,18 @@
 /** @jsxImportSource @emotion/react */
 import { FC, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { find, map, difference, uniqueId, clamp } from 'lodash'
-import { proxy, useSnapshot } from 'valtio'
-
-import { getLevelById } from '../../database'
-import { VIEWPORTS_LIMIT } from '../../config'
-import proxyState from '../../store'
+import { useSnapshot, subscribe } from 'valtio'
 import { useDrag, useWheel } from 'react-use-gesture'
 import { a, useSpring, to } from '@react-spring/web'
 
-const proxyLayoutState = proxy<{ size: [number, number] }>({ size: [0, 0] })
+import { getLevelById } from '../../database'
+import { VIEWPORTS_LIMIT } from '../../config'
+import proxyState, { isBoundViewOffsetEnabled, isBoundViewScaleEnabled } from '../../store'
 
 export const DEFAULT_VIEWPORT_SCALE = 4
+
+const ZOOM_RATE = 0.003
+const MAX_ZOOM = 4
 
 // section #########################################################################################
 //  VIEW
@@ -50,51 +51,117 @@ const View: FC<
 
   const [levelSize, setLevelSize] = useState<[number, number]>([0, 0])
 
-  const [{ x, y, scale }, setOptions] = useSpring(() => ({
-    x: 0,
-    y: 0,
+  const [{ offset, scale }, setOptions] = useSpring(() => ({
+    offset: [0.5, 0.5],
     scale: 1,
     config: { tension: 1000, friction: 66.6 },
   }))
 
   const transform = useMemo(() => {
-    return to([x, y, scale], (x, y, scale) => {
+    return to([offset, scale], (offset, scale) => {
+      const x = (offset as any)[0] * levelSize[0]
+      const y = (offset as any)[1] * levelSize[1]
       return `translate(${-x}px, ${-y}px) scale(${scale})`
     })
-  }, [x, y, scale])
+  }, [offset, levelSize, scale])
 
   const transformOrigin = useMemo(() => {
-    return to([x, y], (x, y) => `${x}px ${y}px`)
-  }, [x, y])
+    return to([offset], (offset) => {
+      const x = (offset as any)[0] * levelSize[0]
+      const y = (offset as any)[1] * levelSize[1]
+      return `${x}px ${y}px`
+    })
+  }, [offset, levelSize])
 
-  const zoomRate = 0.003
-  const maxZoom = 4
-
-  const handleScale = useWheel(
-    ({ offset: [_, sy] }) => {
-      const scale = -sy * zoomRate + 1
-      const xMin = width / 2 / scale
-      const xMax = (levelSize[0] * scale - width / 2) / scale
-      const yMin = height / 2 / scale
-      const yMax = (levelSize[1] * scale - height / 2) / scale
-      setOptions({ scale, x: clamp(x.get(), xMin, xMax), y: clamp(y.get(), yMin, yMax) })
+  const clampOffset = useCallback(
+    ([x, y]: number[], s: number) => {
+      const scaledLevelWidth = s * levelSize[0]
+      const scaledLevelHeight = s * levelSize[1]
+      const xMin = width / 2 / scaledLevelWidth
+      const xMax = (scaledLevelWidth - width / 2) / scaledLevelWidth
+      const yMin = height / 2 / scaledLevelHeight
+      const yMax = (scaledLevelHeight - height / 2) / scaledLevelHeight
+      const clampedOffset = [clamp(x, xMin, xMax), clamp(y, yMin, yMax)]
+      return clampedOffset
     },
-    { bounds: { top: -(maxZoom / zoomRate), bottom: 0 } }
+    [width, height, levelSize]
   )
 
-  const handleDrag = useDrag(
-    ({ movement: [mx, my] }) => setOptions({ x: -mx / scale.get(), y: -my / scale.get() }),
+  const handleOffset = useDrag(
+    ({ movement: [mx, my] }) => {
+      const [levelWidth, levelHeight] = levelSize
+      const s = scale.get()
+      const xy = [-mx / s / levelWidth, -my / s / levelHeight]
+      setOptions({ offset: xy })
+
+      if (!isBoundViewOffsetEnabled()) return
+      proxyState.layout.boundViewOffset.targetId = id
+      proxyState.layout.boundViewOffset.value = xy
+    },
     {
-      initial: () => [-x.get() * scale.get(), -y.get() * scale.get()],
-      bounds: () => ({
-        left: -(levelSize[0] * scale.get() - width / 2),
-        right: -(width / 2),
-        top: -(levelSize[1] * scale.get() - height / 2),
-        bottom: -(height / 2),
-      }),
+      initial: () => {
+        const [x, y] = offset.get()
+        const [levelWidth, levelHeight] = levelSize
+        const s = scale.get()
+        return [-x * levelWidth * s, -y * levelHeight * s]
+      },
+      bounds: () => {
+        const [levelWidth, levelHeight] = levelSize
+        const s = scale.get()
+        return {
+          left: -(levelWidth * s - width / 2),
+          right: -(width / 2),
+          top: -(levelHeight * s - height / 2),
+          bottom: -(height / 2),
+        }
+      },
       rubberband: true,
     }
   )
+
+  const handleBoundOffset = useCallback(() => {
+    if (!isBoundViewOffsetEnabled()) return
+    if (proxyState.layout.boundViewOffset.targetId === id) return
+    const s = scale.get()
+    const xy = clampOffset(proxyState.layout.boundViewOffset.value, s)
+    setOptions({ offset: xy })
+  }, [setOptions, clampOffset, scale, id])
+
+  const handleScale = useWheel(
+    ({ movement: [_, wheel] }) => {
+      const s = -wheel * ZOOM_RATE + 1
+      const xy = clampOffset(offset.get(), s)
+      setOptions({ scale: s, offset: xy })
+
+      if (!isBoundViewScaleEnabled()) return
+      proxyState.layout.boundViewScale.targetId = id
+      proxyState.layout.boundViewScale.value = s
+      if (!isBoundViewOffsetEnabled()) return
+      proxyState.layout.boundViewOffset.targetId = id
+      proxyState.layout.boundViewOffset.value = xy
+    },
+    {
+      initial: () => [0, -(scale.get() - 1) / ZOOM_RATE],
+      bounds: { top: -(MAX_ZOOM / ZOOM_RATE), bottom: 0 },
+    }
+  )
+
+  const handleBoundScale = useCallback(() => {
+    if (!isBoundViewScaleEnabled()) return
+    if (proxyState.layout.boundViewScale.targetId === id) return
+    const s = proxyState.layout.boundViewScale.value
+    const xy = clampOffset(offset.get(), s)
+    setOptions({ scale: s, offset: xy })
+  }, [setOptions, clampOffset, offset, id])
+
+  useEffect(() => {
+    const unsubscribeBoundScale = subscribe(proxyState.layout.boundViewScale, handleBoundScale)
+    const unsubscribeBoundOffset = subscribe(proxyState.layout.boundViewOffset, handleBoundOffset)
+    return () => {
+      unsubscribeBoundScale()
+      unsubscribeBoundOffset()
+    }
+  }, [handleBoundScale, handleBoundOffset])
 
   useLayoutEffect(() => {
     const levelElement = levelElementRef.current
@@ -119,13 +186,11 @@ const View: FC<
       levelElement.style.width = `${levelWidth}px`
       levelElement.style.height = `${levelHeight}px`
       setLevelSize([levelWidth, levelHeight])
-      // todo: reset only on first load
-      setOptions({ x: levelWidth / 2, y: levelHeight / 2, scale: 1 })
     }
     updateLevelSize()
     blueprintElement.addEventListener('load', updateLevelSize)
     return () => blueprintElement.removeEventListener('load', updateLevelSize)
-  }, [level.blueprint, width, height, setLevelSize, setOptions, x, y])
+  }, [level.blueprint, width, height, setLevelSize, setOptions])
 
   const handleLevelSwitch = useCallback(
     ({ target }) => {
@@ -148,7 +213,7 @@ const View: FC<
       <a.div
         ref={levelElementRef}
         css={{ position: 'absolute', left: '50%', top: '50%', userSelect: 'none' }}
-        {...handleDrag()}
+        {...handleOffset()}
         style={{ transform, transformOrigin }}
       >
         <img
@@ -226,7 +291,7 @@ const Viewport: FC<
     onLevelSwitch: (viewId: string, levelId: number) => void
   }
 > = ({ onViewportClose, onLevelSwitch, ...viewport }) => {
-  const state = useSnapshot(proxyLayoutState)
+  const state = useSnapshot(proxyState.layout)
 
   const positionStyles = useMemo(() => {
     const {
@@ -394,7 +459,7 @@ const Layout: FC = () => {
       const layoutElement = layoutElementRef.current
       if (!layoutElement) throw new Error('Unexpected.')
       const { width, height } = layoutElement.getBoundingClientRect()
-      proxyLayoutState.size = [width, height]
+      proxyState.layout.size = [width, height]
     }
     setLayoutSize()
     document.addEventListener('DOMContentLoaded', setLayoutSize)

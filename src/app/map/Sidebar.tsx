@@ -6,7 +6,7 @@ import { useSnapshot } from 'valtio'
 
 import db, { getLevelById } from '../../database'
 import { VIEWPORTS_LIMIT } from '../../config'
-import proxyState, { toggleLevel } from '../../store'
+import proxyState, { toggleBoundViewOffset, toggleBoundViewScale, toggleLevel } from '../../store'
 
 const Sidebar: FC = () => {
   const state = useSnapshot(proxyState)
@@ -47,6 +47,24 @@ const Sidebar: FC = () => {
       <small>Released: {new Date(state.map.released).toDateString()}</small>
       <br />
       {state.map.reworked && <small>Reworked: {new Date(state.map.reworked).toDateString()}</small>}
+      <div>
+        <button
+          css={{
+            border: state.layout.boundViewOffset.status === 'enabled' ? '1px solid blue' : 'none',
+          }}
+          onClick={toggleBoundViewOffset}
+        >
+          bind offset
+        </button>
+        <button
+          css={{
+            border: state.layout.boundViewScale.status === 'enabled' ? '1px solid blue' : 'none',
+          }}
+          onClick={toggleBoundViewScale}
+        >
+          bind scale
+        </button>
+      </div>
       <div css={{ display: 'grid', rowGap: '1px', padding: '1px' }}>
         {state.map.levels.map((id) => {
           const level = getLevelById(id)
