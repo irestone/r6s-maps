@@ -1,7 +1,7 @@
 import { find } from 'lodash'
 
 export type TMap = {
-  id: number,
+  id: string,
   slug: string,
   name: string,
   description: string,
@@ -10,29 +10,95 @@ export type TMap = {
   reworked: string, // ISO
   playlists: 'new-comer' | 'casual' | 'ranked',
   preview: string, // URL
-  levels: number[], // TLevel{id}
+  levels: string[], // TLevelData{id}
 }
 
-export type TLevel = {
-  id: number,
-  type: 'b' | '1f' | '2f' | '3f' | 'r',
-  blueprint: string,
+export type TLevelType = 'b' | '1f' | '2f' | '3f' | 'r'
+
+export type TLevelData = {
+  id: string,
+  type: TLevelType,
+  blueprint: {
+    src: string,
+    width: number,
+    height: number,
+  },
   objects: any[],
 }
 
-const levels: TLevel[] = [
-  { id: 1, type: 'b', blueprint: '/assets/maps/chalet/basement.jpg', objects: [] },
-  { id: 2, type: '1f', blueprint: '/assets/maps/chalet/1-floor.jpg', objects: [] },
-  { id: 3, type: '2f', blueprint: '/assets/maps/chalet/2-floor.jpg', objects: [] },
-  { id: 4, type: 'r', blueprint: '/assets/maps/chalet/roof.jpg', objects: [] },
-  { id: 5, type: 'b', blueprint: '/assets/maps/bank/basement.jpg', objects: [] },
-  { id: 6, type: '1f', blueprint: '/assets/maps/bank/1-floor.jpg', objects: [] },
-  { id: 7, type: '2f', blueprint: '/assets/maps/bank/2-floor.jpg', objects: [] },
-  { id: 8, type: 'r', blueprint: '/assets/maps/bank/roof.jpg', objects: [] },
-  { id: 9, type: 'b', blueprint: '/assets/maps/consulate/basement.jpg', objects: [] },
-  { id: 10, type: '1f', blueprint: '/assets/maps/consulate/1-floor.jpg', objects: [] },
-  { id: 11, type: '2f', blueprint: '/assets/maps/consulate/2-floor.jpg', objects: [] },
-  { id: 12, type: 'r', blueprint: '/assets/maps/consulate/roof.jpg', objects: [] },
+const levels: TLevelData[] = [
+  {
+    id: 1,
+    type: 'b',
+    blueprint: { src: '/assets/maps/chalet/basement.jpg', width: 1600, height: 900 },
+    objects: [],
+  },
+  {
+    id: 2,
+    type: '1f',
+    blueprint: { src: '/assets/maps/chalet/1-floor.jpg', width: 1600, height: 900 },
+    objects: [],
+  },
+  {
+    id: 3,
+    type: '2f',
+    blueprint: { src: '/assets/maps/chalet/2-floor.jpg', width: 1600, height: 900 },
+    objects: [],
+  },
+  {
+    id: 4,
+    type: 'r',
+    blueprint: { src: '/assets/maps/chalet/roof.jpg', width: 1600, height: 900 },
+    objects: [],
+  },
+  {
+    id: 5,
+    type: 'b',
+    blueprint: { src: '/assets/maps/bank/basement.jpg', width: 1600, height: 900 },
+    objects: [],
+  },
+  {
+    id: 6,
+    type: '1f',
+    blueprint: { src: '/assets/maps/bank/1-floor.jpg', width: 1600, height: 900 },
+    objects: [],
+  },
+  {
+    id: 7,
+    type: '2f',
+    blueprint: { src: '/assets/maps/bank/2-floor.jpg', width: 1600, height: 900 },
+    objects: [],
+  },
+  {
+    id: 8,
+    type: 'r',
+    blueprint: { src: '/assets/maps/bank/roof.jpg', width: 1600, height: 900 },
+    objects: [],
+  },
+  {
+    id: 9,
+    type: 'b',
+    blueprint: { src: '/assets/maps/consulate/basement.jpg', width: 1600, height: 900 },
+    objects: [],
+  },
+  {
+    id: 10,
+    type: '1f',
+    blueprint: { src: '/assets/maps/consulate/1-floor.jpg', width: 1600, height: 900 },
+    objects: [],
+  },
+  {
+    id: 11,
+    type: '2f',
+    blueprint: { src: '/assets/maps/consulate/2-floor.jpg', width: 1600, height: 900 },
+    objects: [],
+  },
+  {
+    id: 12,
+    type: 'r',
+    blueprint: { src: '/assets/maps/consulate/roof.jpg', width: 1600, height: 900 },
+    objects: [],
+  },
 ]
 
 const maps: TMap[] = [
@@ -79,15 +145,21 @@ const db = { maps, levels }
 
 // export const getMap = (predicate: ListIterateeCustom<TMap, boolean>) => find(maps, predicate)
 
-// ! It's a questionable decision to throw an error here in getters
+// ! Throwing an error here in getters. Kinda meh..
 
-export const getMapBySlug = (slug: string) => {
+export const getMapBySlug = (slug: string): TMap => {
   const map = find(maps, { slug })
   if (!map) throw new Error('Map not found.')
   return map
 }
 
-export const getLevelById = (id: number) => {
+export const getMapById = (id: string): TMap => {
+  const map = find(maps, { id })
+  if (!map) throw new Error('Map not found.')
+  return map
+}
+
+export const getLevelById = (id: string): TLevelData => {
   const level = find(levels, { id })
   if (!level) throw new Error('Level not found.')
   return level
